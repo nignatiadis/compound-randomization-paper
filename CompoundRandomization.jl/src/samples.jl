@@ -6,7 +6,7 @@ the observations or summaries needed by their supported randomization groups.
 
 Scores are callables `score(sample)`; no particular statistic, model, or summary
 representation is required by this abstract type. Learned scores implement
-`fit(estimator, group, samples)` using information invariant under that group.
+`fit_statistic(group, estimator, samples)` using information invariant under that group.
 
 New sample types should validate their inputs on construction, or specialize
 `checked_samples` for checks involving the collection (e.g. a shared design).
@@ -64,7 +64,7 @@ Empirikos.NormalChiSquareSample(x::ReplicatedSample) =
 Two groups of observations for one hypothesis, testing equality of their means
 (Section 7.1). Both groups must be nonempty, with K = length(a)+length(b) > 2.
 Copies the observations into `Z`, with group A first and group B second.
-The group sizes are stored in `nA` and `nB`.
+The group sizes are stored in `K_A` and `K_B`.
 Treat `Z` as read-only. Cached summaries are:
 
 - `δ̂`: mean(A) - mean(B).
@@ -76,27 +76,27 @@ available for scores, but do not restrict which callable statistics can be used.
 """
 struct TwoSample{V<:AbstractVector{<:Real},M<:Real,S<:Real} <: AbstractRandomizationSample{V}
     Z::V
-    nA::Int
-    nB::Int
+    K_A::Int
+    K_B::Int
     δ̂::M
     σ̂²::S
     τ̂²::S
 
     function TwoSample(a::AbstractVector{<:Real}, b::AbstractVector{<:Real})
         !isempty(a) && !isempty(b) || throw(ArgumentError("both groups must be nonempty"))
-        nA, nB = length(a), length(b)
-        K = nA + nB
+        K_A, K_B = length(a), length(b)
+        K = K_A + K_B
         K > 2 || throw(ArgumentError("at least three observations are required"))
         Z = vcat(a, b)
         all(isfinite, Z) || throw(ArgumentError("observations must be finite"))
         # Canonical summation order preserves within-group permutation ties.
         # The stored raw observations retain their original order for custom scores.
-        A, B = sort(Z[1:nA]), sort(Z[nA+1:end])
+        A, B = sort(Z[1:K_A]), sort(Z[K_A+1:end])
         μA, μB = mean(A), mean(B)
         δ̂ = μA - μB
         σ̂² = (sum(abs2, A .- μA) + sum(abs2, B .- μB)) / (K - 2)
         τ̂² = var(sort(Z); corrected=true)
-        new{typeof(Z),typeof(δ̂),typeof(σ̂²)}(Z, nA, nB, δ̂, σ̂², τ̂²)
+        new{typeof(Z),typeof(δ̂),typeof(σ̂²)}(Z, K_A, K_B, δ̂, σ̂², τ̂²)
     end
 end
 
@@ -104,62 +104,16 @@ nobs(x::TwoSample) = length(x.Z)
 
 function checked_samples(samples::AbstractVector{<:TwoSample})
     isempty(samples) && throw(ArgumentError("at least one hypothesis is required"))
-    (; nA, nB) = first(samples)
-    all(x -> x.nA == nA && x.nB == nB, samples) ||
+    (; K_A, K_B) = first(samples)
+    all(x -> x.K_A == K_A && x.K_B == K_B, samples) ||
         throw(DimensionMismatch("group sizes must agree across hypotheses"))
     all(x -> all(isfinite, x.Z), samples) || throw(ArgumentError("observations must be finite"))
     samples
 end
 
-"""Absolute difference in sample means, abs(mean(A) - mean(B))."""
-struct AbsMeanDifference end
-(::AbsMeanDifference)(x::TwoSample) = abs(x.δ̂)
-
 """The coefficient and residual-variance summaries in equation (31), with K-2 df."""
 function Empirikos.NormalChiSquareSample(x::TwoSample)
-    v = inv(x.nA) + inv(x.nB)
+    v = inv(x.K_A) + inv(x.K_B)
     coefficient, variance = promote(x.δ̂ / sqrt(v), x.σ̂²)
     Empirikos.NormalChiSquareSample(coefficient, variance, nobs(x) - 2)
 end
-
-struct AbsMean end
-(::AbsMean)(s::ReplicatedSample) = abs(mean(s))
-
-"""
-    ModeratedTScore(prior)
-
-Absolute moderated t-statistic, using a fitted variance prior.
-A point-mass prior gives the absolute z-score.
-
-For a new sample type, implement `Empirikos.NormalChiSquareSample(x)` returning
-the standardized coefficient estimate delta-hat/sqrt(v), residual variance,
-and residual degrees of freedom (Section 7, equations (31)-(32)). This adapter
-is specific to moderated scores, not a requirement on other statistics.
-
-To estimate the prior, call `fit(ModeratedTScore(estimator), group, samples)`.
-This uses `orbit_variance(group, x)`, not the score's residual variance.
-Neither summary is assumed to identify the entire orbit. This estimator learns
-one shared prior; covariate-dependent priors need their own estimator and score.
-For one-sample data, the two-argument shorthand uses tau_i^2 = sum(z_i.^2)/K
-with K degrees of freedom, invariant under both sign flips and full rotations.
-"""
-struct ModeratedTScore{P}
-    prior::P
-end
-
-sign_symmetric(::Any) = false
-sign_symmetric(::AbsMean) = true
-sign_symmetric(::ModeratedTScore) = true
-
-(score::ModeratedTScore)(x::AbstractRandomizationSample) =
-    score(Empirikos.NormalChiSquareSample(x))
-
-function (score::ModeratedTScore{<:Empirikos.InverseScaledChiSquare})(x::Empirikos.NormalChiSquareSample)
-    iszero(x.Z) && return 0.0
-    variance = Empirikos.ScaledChiSquareSample(x)
-    post = Empirikos.posterior(variance, score.prior)
-    abs(x.Z) / sqrt(post.σ²)
-end
-
-(score::ModeratedTScore{<:Dirac})(x::Empirikos.NormalChiSquareSample) =
-    abs(x.Z) / sqrt(score.prior.value)

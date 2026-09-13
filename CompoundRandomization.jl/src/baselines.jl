@@ -72,10 +72,13 @@ function fit(method::LocalFDROracle, data::AbstractVector{<:ReplicatedSample})
         rj_idx = rejected, total_rejections = count(rejected))
 end
 
-"""Original R SENS implementation. Load RCall and supply the R script and split seed."""
+"""
+SENS using the bundled R implementation. Load RCall, install HDInterval in R,
+and supply a split seed. Set `script` to use a different R implementation.
+"""
 Base.@kwdef struct SENS
     variant::Symbol = :gaussian
-    script::String
+    script::String = joinpath(@__DIR__, "..", "ext", "SENS_standalone.R")
     seed::Int
     α::Float64 = 0.1
 end
