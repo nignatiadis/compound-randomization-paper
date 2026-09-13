@@ -1,11 +1,26 @@
 """
+    AbstractRandomizationSample{T} <: Empirikos.EBayesSample{T}
+
+Data for one hypothesis. Concrete types specify the testing problem and retain
+the observations or summaries needed by their supported randomization groups.
+
+Scores are callables `score(sample)`; no particular statistic, model, or summary
+representation is required by this abstract type. Learned scores implement
+`fit(estimator, group, samples)` using information invariant under that group.
+
+New sample types should validate their inputs on construction, or specialize
+`checked_samples` for checks involving the collection (e.g. a shared design).
+"""
+abstract type AbstractRandomizationSample{T} <: Empirikos.EBayesSample{T} end
+
+"""
     ReplicatedSample(z)
 
 Replicate measurements for one hypothesis, with cached mean, corrected sample
 variance, and orbit variance `sum(abs2, z)/length(z)`.
 Copies `z`; treat the stored replicates `Z` as read-only.
 """
-struct ReplicatedSample{V<:AbstractVector{<:Real},M<:Real,S<:Real} <: Empirikos.EBayesSample{V}
+struct ReplicatedSample{V<:AbstractVector{<:Real},M<:Real,S<:Real} <: AbstractRandomizationSample{V}
     Z::V
     μ̂::M
     σ̂²::S
@@ -24,6 +39,11 @@ nobs(s::ReplicatedSample) = length(s.Z)
 Statistics.mean(s::ReplicatedSample) = s.μ̂
 Statistics.var(s::ReplicatedSample) = s.σ̂²
 
+function checked_samples(s::AbstractVector{<:AbstractRandomizationSample})
+    isempty(s) && throw(ArgumentError("at least one hypothesis is required"))
+    s
+end
+
 function checked_samples(s::AbstractVector{<:ReplicatedSample})
     isempty(s) && throw(ArgumentError("at least one hypothesis is required"))
     K = nobs(first(s))
@@ -38,6 +58,70 @@ Empirikos.NormalChiSquareSample(x::ReplicatedSample) =
     Empirikos.NormalChiSquareSample(sqrt(nobs(x)) * mean(x), var(x), nobs(x) - 1)
 
 
+"""
+    TwoSample(a, b)
+
+Two groups of observations for one hypothesis, testing equality of their means
+(Section 7.1). Both groups must be nonempty, with K = length(a)+length(b) > 2.
+Copies the observations into `Z`, with group A first and group B second.
+The group sizes are stored in `nA` and `nB`.
+Treat `Z` as read-only. Cached summaries are:
+
+- `δ̂`: mean(A) - mean(B).
+- `σ̂²`: pooled within-group variance, with K-2 residual degrees of freedom.
+- `τ̂²`: overall centered sample variance, ignoring labels, with K-1 df.
+
+The raw observations are retained for permutation tests. These summaries are
+available for scores, but do not restrict which callable statistics can be used.
+"""
+struct TwoSample{V<:AbstractVector{<:Real},M<:Real,S<:Real} <: AbstractRandomizationSample{V}
+    Z::V
+    nA::Int
+    nB::Int
+    δ̂::M
+    σ̂²::S
+    τ̂²::S
+
+    function TwoSample(a::AbstractVector{<:Real}, b::AbstractVector{<:Real})
+        !isempty(a) && !isempty(b) || throw(ArgumentError("both groups must be nonempty"))
+        nA, nB = length(a), length(b)
+        K = nA + nB
+        K > 2 || throw(ArgumentError("at least three observations are required"))
+        Z = vcat(a, b)
+        all(isfinite, Z) || throw(ArgumentError("observations must be finite"))
+        # Canonical summation order preserves within-group permutation ties.
+        # The stored raw observations retain their original order for custom scores.
+        A, B = sort(Z[1:nA]), sort(Z[nA+1:end])
+        μA, μB = mean(A), mean(B)
+        δ̂ = μA - μB
+        σ̂² = (sum(abs2, A .- μA) + sum(abs2, B .- μB)) / (K - 2)
+        τ̂² = var(sort(Z); corrected=true)
+        new{typeof(Z),typeof(δ̂),typeof(σ̂²)}(Z, nA, nB, δ̂, σ̂², τ̂²)
+    end
+end
+
+nobs(x::TwoSample) = length(x.Z)
+
+function checked_samples(samples::AbstractVector{<:TwoSample})
+    isempty(samples) && throw(ArgumentError("at least one hypothesis is required"))
+    (; nA, nB) = first(samples)
+    all(x -> x.nA == nA && x.nB == nB, samples) ||
+        throw(DimensionMismatch("group sizes must agree across hypotheses"))
+    all(x -> all(isfinite, x.Z), samples) || throw(ArgumentError("observations must be finite"))
+    samples
+end
+
+"""Absolute difference in sample means, abs(mean(A) - mean(B))."""
+struct AbsMeanDifference end
+(::AbsMeanDifference)(x::TwoSample) = abs(x.δ̂)
+
+"""The coefficient and residual-variance summaries in equation (31), with K-2 df."""
+function Empirikos.NormalChiSquareSample(x::TwoSample)
+    v = inv(x.nA) + inv(x.nB)
+    coefficient, variance = promote(x.δ̂ / sqrt(v), x.σ̂²)
+    Empirikos.NormalChiSquareSample(coefficient, variance, nobs(x) - 2)
+end
+
 struct AbsMean end
 (::AbsMean)(s::ReplicatedSample) = abs(mean(s))
 
@@ -47,8 +131,17 @@ struct AbsMean end
 Absolute moderated t-statistic, using a fitted variance prior.
 A point-mass prior gives the absolute z-score.
 
-To estimate the prior, call `fit(ModeratedTScore(estimator), samples)` first.
-This uses the orbit variances tau_i^2 = sum(z_i.^2)/K with K degrees of freedom.
+For a new sample type, implement `Empirikos.NormalChiSquareSample(x)` returning
+the standardized coefficient estimate delta-hat/sqrt(v), residual variance,
+and residual degrees of freedom (Section 7, equations (31)-(32)). This adapter
+is specific to moderated scores, not a requirement on other statistics.
+
+To estimate the prior, call `fit(ModeratedTScore(estimator), group, samples)`.
+This uses `orbit_variance(group, x)`, not the score's residual variance.
+Neither summary is assumed to identify the entire orbit. This estimator learns
+one shared prior; covariate-dependent priors need their own estimator and score.
+For one-sample data, the two-argument shorthand uses tau_i^2 = sum(z_i.^2)/K
+with K degrees of freedom, invariant under both sign flips and full rotations.
 """
 struct ModeratedTScore{P}
     prior::P
@@ -58,20 +151,15 @@ sign_symmetric(::Any) = false
 sign_symmetric(::AbsMean) = true
 sign_symmetric(::ModeratedTScore) = true
 
-function fit(score::ModeratedTScore{<:Empirikos.LimmaMethod}, data::AbstractVector{<:ReplicatedSample})
-    s = checked_samples(data)
-    tau = Empirikos.ScaledChiSquareSample.(getproperty.(s, :τ̂²), nobs.(s))
-    ModeratedTScore(Empirikos.fit_prior(score.prior, tau))
-end
+(score::ModeratedTScore)(x::AbstractRandomizationSample) =
+    score(Empirikos.NormalChiSquareSample(x))
 
-function (score::ModeratedTScore{<:Empirikos.InverseScaledChiSquare})(x::ReplicatedSample)
-    K = nobs(x)
-    mu = mean(x)
-    iszero(mu) && return 0.0
-    variance = Empirikos.ScaledChiSquareSample(var(x), K - 1)
+function (score::ModeratedTScore{<:Empirikos.InverseScaledChiSquare})(x::Empirikos.NormalChiSquareSample)
+    iszero(x.Z) && return 0.0
+    variance = Empirikos.ScaledChiSquareSample(x)
     post = Empirikos.posterior(variance, score.prior)
-    sqrt(K) * abs(mu) / sqrt(post.σ²)
+    abs(x.Z) / sqrt(post.σ²)
 end
 
-(score::ModeratedTScore{<:Dirac})(x::ReplicatedSample) =
-    sqrt(nobs(x)) * abs(mean(x)) / sqrt(score.prior.value)
+(score::ModeratedTScore{<:Dirac})(x::Empirikos.NormalChiSquareSample) =
+    abs(x.Z) / sqrt(score.prior.value)
