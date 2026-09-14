@@ -22,4 +22,4 @@ function main(args)
     end
 end
 
-abspath(PROGRAM_FILE) == @__FILE__ && main(ARGS)
+abspath(PROGRAM_FILE) == (@__FILE__) && main(ARGS)
