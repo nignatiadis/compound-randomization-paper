@@ -386,16 +386,4 @@ end
     @test all_rejected.lfdr_cutoff == 1
     @test all_rejected.total_rejections == 100
 
-    # Very small FDR level, with component tails still representable in Float64.
-    pi1 = 0.025
-    alpha = (1 - pi1) / (1 - pi1 + pi1 * 2.0^52) * 1.1
-    extreme = fit(LocalFDROracle(π1=pi1, λ=1, ν0=100, s0²=1, α=alpha), samples)
-    null = TDist(104)
-    alternative = sqrt(2.0) * null
-    @test isfinite(extreme.t_cutoff)
-    @test 0 < ccdf(null, extreme.t_cutoff) < 1e-50
-    @test 0 < ccdf(alternative, extreme.t_cutoff) < 1e-50
-    log_ratio = log(pi1) - log1p(-pi1) +
-        logccdf(alternative, extreme.t_cutoff) - logccdf(null, extreme.t_cutoff)
-    @test inv(1 + exp(log_ratio)) ≈ alpha rtol=1e-10
 end

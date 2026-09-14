@@ -1,0 +1,14 @@
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+Combinatorics = "861a8166-3701-5b0c-9a16-15d98fcdc6aa"
+CompoundRandomization = "8536e51b-2e87-4c84-9ae4-37e2f82a6619"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+Empirikos = "cab608d6-c565-4ea1-96d6-ce5441ba21b0"
+MultipleTesting = "f8716d33-7c4a-5097-896f-ce0ecbd3ef6b"
+RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
+StatsDiscretizations = "1d0cfea5-fabc-4e25-85a8-945fa8abc3c9"
+
+[compat]
+CSV = "0.10"
+RCall = "0.14"
+julia = "=1.10.12"
