@@ -53,6 +53,17 @@ This is not the full `OrthogonalRotations()` group, which would move the nuisanc
 struct CenteredRotations <: AbstractRandomizationGroup end
 
 """
+    ResidualRotations()
+
+The subgroup H_orth,X = {H in O(K): H*X = X} of Section 7.2, for
+`RegressionSample`. Fix the nuisance projection P_X*z and rotate its orthogonal
+complement in dimension K-p = ν+1. The design X comes from each sample's shared
+`RegressionDesign(W, X)`. Null errors must be invariant under these rotations;
+the homoskedastic Gaussian regression model suffices. 
+"""
+struct ResidualRotations <: AbstractRandomizationGroup end
+
+"""
     InvolutionGroup(H)
     InvolutionGroup()
 
@@ -121,8 +132,7 @@ its Gaussian-null distribution, not necessarily the score's residual df.
 For one-sample sign flips and rotations this is tau-hat^2 with K df, equation (19).
 Section 7 sample/group combinations supply their own methods: two-sample permutations and
 rotations use the overall centered variance with K-1 df; regression rotations
-fixing X use norm((I-P_X)z)^2/(K-p) with K-p df. Regression rotations are not
-implemented yet. This interface is specific to variance-prior estimation;
+fixing X use norm((I-P_X)z)^2/(K-p) with K-p df. This interface is specific to variance-prior estimation;
 other score estimators need not use it.
 
 No fallback is supplied: invariance must be established for each sample/group
@@ -138,6 +148,9 @@ orbit_variance(::Permutations, x::TwoSample) =
     Empirikos.ScaledChiSquareSample(x.τ̂², nobs(x) - 1)
 orbit_variance(::CenteredRotations, x::TwoSample) =
     Empirikos.ScaledChiSquareSample(x.τ̂², nobs(x) - 1)
+
+orbit_variance(::ResidualRotations, x::RegressionSample) =
+    Empirikos.ScaledChiSquareSample(x.τ̂², x.design.ν + 1)
 
 orbit_variance(::InvolutionGroup{HalfSplit}, x::ReplicatedSample) =
     Empirikos.ScaledChiSquareSample(x.τ̂², nobs(x))
@@ -282,6 +295,8 @@ then gives (33); v cancels through coefficient standardization.
 rotation_argument(r::RotationReference{AbsMean}, i, t) =
     abs2(t) / (r.contrast_variance * r.norm2[i])
 rotation_argument(r::RotationReference{AbsMeanDifference}, i, t) =
+    abs2(t) / (r.contrast_variance * r.norm2[i])
+rotation_argument(r::RotationReference{AbsCoefficient}, i, t) =
     abs2(t) / (r.contrast_variance * r.norm2[i])
 rotation_argument(r::RotationReference{<:ModeratedTScore{<:Dirac}}, i, t) =
     abs2(t) * r.statistic.prior.value / r.norm2[i]
@@ -447,6 +462,24 @@ function fit_reference(group::CenteredRotations, score::Union{AbsMeanDifference,
     observed = Float64.(score.(samples))
     !any(isnan, observed) || throw(ArgumentError("scores must not be NaN"))
     reference = RotationReference(score, [(K - 1) * x.τ̂² for x in samples], K - 1, v)
+    RandomizationFit(group, score, observed, reference)
+end
+
+"""
+    fit_reference(ResidualRotations(), score, samples::AbstractVector{<:RegressionSample})
+
+Analytic Haar tails for the absolute coefficient or moderated t-score in Section
+7.2. The nuisance projection is fixed, not randomized or discarded
+from the sample. Prior learning uses orbit df ν+1, whereas the score uses ν.
+"""
+function fit_reference(group::ResidualRotations, score::Union{AbsCoefficient,ModeratedTScore},
+    samples::AbstractVector{<:RegressionSample})
+    checked_samples(samples)
+    design = first(samples).design
+    observed = Float64.(score.(samples))
+    !any(isnan, observed) || throw(ArgumentError("scores must not be NaN"))
+    d = design.ν + 1
+    reference = RotationReference(score, [d * x.τ̂² for x in samples], d, design.v)
     RandomizationFit(group, score, observed, reference)
 end
 

@@ -91,6 +91,8 @@ rotation_maximum(r::RotationReference{AbsMean}, i) =
     sqrt(r.contrast_variance * r.norm2[i])
 rotation_maximum(r::RotationReference{AbsMeanDifference}, i) =
     sqrt(r.contrast_variance * r.norm2[i])
+rotation_maximum(r::RotationReference{AbsCoefficient}, i) =
+    sqrt(r.contrast_variance * r.norm2[i])
 rotation_maximum(r::RotationReference{<:ModeratedTScore{<:Dirac}}, i) =
     sqrt(r.norm2[i] / r.statistic.prior.value)
 function rotation_maximum(r::RotationReference{<:ModeratedTScore{<:Empirikos.InverseScaledChiSquare}}, i)

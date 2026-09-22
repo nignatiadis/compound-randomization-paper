@@ -10,7 +10,7 @@ using Statistics
 import StatsBase: fit, nobs
 
 export AbstractRandomizationSample, ReplicatedSample, AbsMean, ModeratedTScore, sign_symmetric,
-    RegressionDesign, RegressionSample, AbsCoefficient,
+    RegressionDesign, RegressionSample, AbsCoefficient, ResidualRotations,
     TwoSample, AbsMeanDifference, Permutations, CenteredRotations, within_group_symmetric, label_symmetric,
     AbstractRandomizationGroup, AbstractMultipleTestingProcedure, AbstractRandomizationReference,
     SignFlips, OrthogonalRotations, HalfSplit, InvolutionGroup, RandomizationFit, MultipleRandomizationTest,
