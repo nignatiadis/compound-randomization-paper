@@ -1,0 +1,6 @@
+/data/
+/results/
+/archive/
+/source/data/
+/source/*.tar.gz
+.DS_Store
