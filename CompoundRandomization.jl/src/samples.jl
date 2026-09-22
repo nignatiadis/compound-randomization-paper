@@ -117,3 +117,92 @@ function Empirikos.NormalChiSquareSample(x::TwoSample)
     coefficient, variance = promote(x.δ̂ / sqrt(v), x.σ̂²)
     Empirikos.NormalChiSquareSample(coefficient, variance, nobs(x) - 2)
 end
+
+"""
+    RegressionDesign(W, X)
+
+Shared fixed design for Z_i = W*delta_i + X*theta_i + epsilon_i (Section 7.2,
+equation (34)). `W` is the vector of interest; columns of `X` are nuisance
+covariates, including an intercept if desired. No intercept is added implicitly.
+The full design [W X] must have full column rank and positive residual df.
+
+Copies the inputs and caches their QR factorization.
+`v = 1/norm((I-P_X)W)^2` is the contrast
+variance factor. `ν` is the full-model residual df K-p-1. Treat fields as read-only.
+"""
+struct RegressionDesign{F}
+    W::Vector{Float64}
+    X::Matrix{Float64}
+    qr::F
+    v::Float64
+    ν::Int
+
+    function RegressionDesign(W::AbstractVector{<:Real}, X::AbstractMatrix{<:Real})
+        length(W) == size(X, 1) || throw(DimensionMismatch("W and X must have the same observation count"))
+        W, X = Vector{Float64}(W), Matrix{Float64}(X)
+        all(isfinite, W) && all(isfinite, X) || throw(ArgumentError("design must be finite"))
+        A = hcat(W, X)
+        ν = size(A, 1) - size(A, 2)
+        ν > 0 || throw(ArgumentError("positive residual degrees of freedom are required"))
+        rank(A) == size(A, 2) || throw(ArgumentError("[W X] must have full column rank"))
+        r = isempty(X) ? copy(W) : W - X * (X \ W)
+        v = inv(sum(abs2, r))
+        factorization = qr(A)
+        new{typeof(factorization)}(W, X, factorization, v, ν)
+    end
+end
+
+"""
+    RegressionSample(z, design::RegressionDesign)
+    RegressionSample(z, W, X)
+
+The input `z` contains the K responses for one hypothesis, in the same observation
+order as the rows of `design.W` and `design.X`; `Z` stores a copy of this vector.
+Tests delta_i = 0 in Section 7.2. `β̂` contains all
+OLS coefficients in [W X] order: delta-hat followed by theta-hat. `δ̂` caches
+the first coefficient. `σ̂²` is the full-model residual variance with ν df;
+`τ̂²` is norm((I-P_X)z)^2/(ν+1), the orbit variance for nuisance-fixed rotations.
+In particular, (ν+1)*τ̂² = ν*σ̂² + δ̂^2/v.
+
+Copies the response; shares `design` across hypotheses. Retains raw observations
+for other statistics. Treat stored observations, coefficients and design as read-only.
+"""
+struct RegressionSample{D<:RegressionDesign} <: AbstractRandomizationSample{Vector{Float64}}
+    Z::Vector{Float64}
+    design::D
+    β̂::Vector{Float64}
+    δ̂::Float64
+    σ̂²::Float64
+    τ̂²::Float64
+
+    function RegressionSample(z::AbstractVector{<:Real}, design::RegressionDesign)
+        length(z) == length(design.W) || throw(DimensionMismatch("response and design lengths differ"))
+        all(isfinite, z) || throw(ArgumentError("response must be finite"))
+        Z = Vector{Float64}(z)
+        β̂ = design.qr \ Z
+        δ̂ = first(β̂)
+        residual = Z - design.W * δ̂ - design.X * view(β̂, 2:length(β̂))
+        rss = sum(abs2, residual)
+        σ̂² = rss / design.ν
+        nuisance_residual = isempty(design.X) ? Z : Z - design.X * (design.X \ Z)
+        τ̂² = sum(abs2, nuisance_residual) / (design.ν + 1)
+        new{typeof(design)}(Z, design, β̂, δ̂, σ̂², τ̂²)
+    end
+end
+
+RegressionSample(z::AbstractVector{<:Real}, W::AbstractVector{<:Real}, X::AbstractMatrix{<:Real}) =
+    RegressionSample(z, RegressionDesign(W, X))
+
+nobs(x::RegressionSample) = length(x.Z)
+
+function checked_samples(samples::AbstractVector{<:RegressionSample})
+    isempty(samples) && throw(ArgumentError("at least one hypothesis is required"))
+    design = first(samples).design
+    all(x -> x.design === design || (x.design.W == design.W && x.design.X == design.X), samples) ||
+        throw(ArgumentError("regression samples must use the same design"))
+    samples
+end
+
+"""Ordinary coefficient summary with full-model residual df, not orbit df (Section 7.2)."""
+Empirikos.NormalChiSquareSample(x::RegressionSample) =
+    Empirikos.NormalChiSquareSample(x.δ̂ / sqrt(x.design.v), x.σ̂², x.design.ν)

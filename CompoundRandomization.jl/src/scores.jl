@@ -6,6 +6,10 @@ struct AbsMean end
 struct AbsMeanDifference end
 (::AbsMeanDifference)(x::TwoSample) = abs(x.δ̂)
 
+"""Absolute OLS coefficient of W in the regression model of Section 7.2."""
+struct AbsCoefficient end
+(::AbsCoefficient)(x::RegressionSample) = abs(x.δ̂)
+
 """
     ModeratedTScore(prior)
 

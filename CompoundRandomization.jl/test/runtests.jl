@@ -21,6 +21,7 @@ end
 include("testing.jl")
 include("interfaces.jl")
 include("two_sample.jl")
+include("regression.jl")
 
 @testset "Sample and baseline interface" begin
     @test isfile(SENS(seed=123).script)

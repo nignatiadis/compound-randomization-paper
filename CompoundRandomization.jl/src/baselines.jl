@@ -1,8 +1,8 @@
-function fit(method::Empirikos.SimultaneousTTest, data::AbstractVector{<:ReplicatedSample})
+function fit(method::Empirikos.SimultaneousTTest, data::AbstractVector{<:AbstractRandomizationSample})
     fit(method, Empirikos.NormalChiSquareSample.(checked_samples(data)))
 end
 
-function fit(method::Empirikos.EmpiricalPartiallyBayesTTest, data::AbstractVector{<:ReplicatedSample})
+function fit(method::Empirikos.EmpiricalPartiallyBayesTTest, data::AbstractVector{<:AbstractRandomizationSample})
     fit(method, Empirikos.NormalChiSquareSample.(checked_samples(data)))
 end
 
