@@ -59,9 +59,30 @@ The subgroup H_orth,X = {H in O(K): H*X = X} of Section 7.2, for
 `RegressionSample`. Fix the nuisance projection P_X*z and rotate its orthogonal
 complement in dimension K-p = ν+1. The design X comes from each sample's shared
 `RegressionDesign(W, X)`. Null errors must be invariant under these rotations;
-the homoskedastic Gaussian regression model suffices. 
+the homoskedastic Gaussian regression model suffices. Coordinate sign flips of
+the original responses do not generally preserve the nuisance mean.
 """
 struct ResidualRotations <: AbstractRandomizationGroup end
+
+"""
+    StratifiedPermutations(; fixed=Int[])
+
+The subgroup {P permutation matrix: P*X = X} for `RegressionSample`.
+Permute responses within strata of exactly equal nuisance-design rows, keeping
+the design fixed. Coordinates listed in `fixed` remain in place. For example,
+`fixed=[1]` fixes observation 1 and enumerates the subgroup on the remaining
+coordinates. Choose these indices in advance, not using the observed scores.
+This is the stratification used by D'Haultfoeuille and
+Tuvaandorj (2024). Null errors must be exchangeable within these strata;
+equality of conditional means alone does not give finite-sample validity.
+
+Enumerate every within-stratum permutation, including identity and repeated
+scores. Singleton strata remain fixed. The group size is the product of the
+stratum-size factorials, so exact enumeration is intended for small strata.
+"""
+Base.@kwdef struct StratifiedPermutations <: AbstractRandomizationGroup
+    fixed::Vector{Int} = Int[]
+end
 
 """
     InvolutionGroup(H)
@@ -150,6 +171,10 @@ orbit_variance(::CenteredRotations, x::TwoSample) =
     Empirikos.ScaledChiSquareSample(x.τ̂², nobs(x) - 1)
 
 orbit_variance(::ResidualRotations, x::RegressionSample) =
+    Empirikos.ScaledChiSquareSample(x.τ̂², x.design.ν + 1)
+
+# P*X = X implies norm((I-P_X)*P*z) = norm((I-P_X)*z).
+orbit_variance(::StratifiedPermutations, x::RegressionSample) =
     Empirikos.ScaledChiSquareSample(x.τ̂², x.design.ν + 1)
 
 orbit_variance(::InvolutionGroup{HalfSplit}, x::ReplicatedSample) =
@@ -469,7 +494,8 @@ end
     fit_reference(ResidualRotations(), score, samples::AbstractVector{<:RegressionSample})
 
 Analytic Haar tails for the absolute coefficient or moderated t-score in Section
-7.2. The nuisance projection is fixed, not randomized or discarded
+7.2. The rotating squared radius is (ν+1)*τ̂² = δ̂²/v + ν*σ̂²; the Beta shapes
+are 1/2 and ν/2. The nuisance projection is fixed, not randomized or discarded
 from the sample. Prior learning uses orbit df ν+1, whereas the score uses ν.
 """
 function fit_reference(group::ResidualRotations, score::Union{AbsCoefficient,ModeratedTScore},
@@ -484,6 +510,76 @@ function fit_reference(group::ResidualRotations, score::Union{AbsCoefficient,Mod
 end
 
 # Finite-group enumeration and fast paths.
+
+"""Enumerate index permutations preserving every row of the nuisance design X."""
+function stratified_permutations(design::RegressionDesign; fixed=Int[])
+    all(i -> i in eachindex(design.W), fixed) || throw(ArgumentError("fixed coordinate out of bounds"))
+    rows = collect(eachrow(design.X))
+    strata = [setdiff(findall(==(row), rows), fixed) for row in unique(rows)]
+    patterns = Iterators.product((permutations(stratum) for stratum in strata)...)
+    map(vec(collect(patterns))) do pattern
+        p = collect(eachindex(design.W))
+        for (stratum, indices) in zip(strata, pattern)
+            p[stratum] = indices
+        end
+        p
+    end
+end
+
+"""
+    fit_reference(StratifiedPermutations(), score, samples)
+
+Evaluate a fixed callable on `RegressionSample(z[p], design)` for every
+nuisance-preserving permutation p. The prior is not refitted. Multiplicities
+are retained, and identity uses the observed score exactly.
+"""
+function fit_reference(group::StratifiedPermutations, score,
+    samples::AbstractVector{<:RegressionSample})
+    checked_samples(samples)
+    design = first(samples).design
+    patterns = stratified_permutations(design; fixed=group.fixed)
+    observed = Float64.(score.(samples))
+    representatives = permutation_score_representatives(score, design, patterns)
+    randomized_scores = Matrix{Float64}(undef, length(patterns), length(samples))
+    for (h, p) in enumerate(patterns)
+        j = representatives[h]
+        if j < h
+            randomized_scores[h,:] = randomized_scores[j,:]
+        else
+            for (i, x) in enumerate(samples)
+                z = x.Z[p]
+                randomized_scores[h,i] = z == x.Z ? observed[i] :
+                    Float64(score(RegressionSample(z, design)))
+            end
+        end
+    end
+    !any(isnan, observed) && !any(isnan, randomized_scores) ||
+        throw(ArgumentError("scores must not be NaN"))
+    foreach(sort!, eachcol(randomized_scores))
+    RandomizationFit(group, score, observed, FiniteRandomizationScores(randomized_scores))
+end
+
+permutation_score_representatives(score, design, patterns) = collect(eachindex(patterns))
+
+"""
+For absolute coefficient and moderated scores, identical or opposite coefficient
+contrasts have exactly equal scores: the nuisance-residual radius is fixed.
+Compute the contrast once in exact arithmetic on the small design matrix, so
+these structural ties are identified without any tolerance on observed scores.
+Every group element is still counted; repeated scores reuse their first value.
+"""
+function permutation_score_representatives(::Union{AbsCoefficient,ModeratedTScore}, design, patterns)
+    A = Rational{BigInt}.(hcat(design.W, design.X))
+    e = zeros(Rational{BigInt}, size(A,2))
+    e[1] = 1
+    contrast = A * ((A' * A) \ e)
+    first_occurrence = Dict{Vector{Rational{BigInt}},Int}()
+    map(enumerate(patterns)) do (h,p)
+        c = contrast[invperm(p)]
+        c[findfirst(!iszero,c)] < 0 && (c = -c)
+        get!(first_occurrence, c, h)
+    end
+end
 
 """
     sign_grid(K, paired)
