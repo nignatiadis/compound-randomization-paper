@@ -5,6 +5,7 @@ CompoundRandomization = "8536e51b-2e87-4c84-9ae4-37e2f82a6619"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Empirikos = "cab608d6-c565-4ea1-96d6-ce5441ba21b0"
 MultipleTesting = "f8716d33-7c4a-5097-896f-ce0ecbd3ef6b"
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
 StatsDiscretizations = "1d0cfea5-fabc-4e25-85a8-945fa8abc3c9"
 
