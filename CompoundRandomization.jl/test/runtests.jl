@@ -22,6 +22,7 @@ include("testing.jl")
 include("interfaces.jl")
 include("two_sample.jl")
 include("regression.jl")
+include("gimenez_zou.jl")
 
 @testset "Sample and baseline interface" begin
     @test isfile(SENS(seed=123).script)
@@ -347,7 +348,7 @@ end
         signs = [j <= cld(K, 2) ? 1 : -1 for j in 1:K]
         observed = [score(ReplicatedSample(collect(row))) for row in eachrow(X)]
         calibration = [score(ReplicatedSample(row .* signs)) for row in eachrow(X)]
-        signed = ifelse.(observed .> calibration, observed, .-calibration)
+        signed = max.(observed, calibration) .* sign.(observed .- calibration)
         admissible = [t for t in unique(abs.(signed)) if t > 0 &&
             (1 + count(signed .<= -t)) / max(count(signed .>= t), 1) <= alpha]
         expected = isempty(admissible) ? falses(30) : signed .>= minimum(admissible)

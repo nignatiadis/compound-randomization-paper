@@ -14,7 +14,7 @@ export AbstractRandomizationSample, ReplicatedSample, AbsMean, ModeratedTScore, 
     TwoSample, AbsMeanDifference, Permutations, CenteredRotations, within_group_symmetric, label_symmetric,
     AbstractRandomizationGroup, AbstractMultipleTestingProcedure, AbstractRandomizationReference,
     SignFlips, OrthogonalRotations, HalfSplit, InvolutionGroup, RandomizationFit, MultipleRandomizationTest,
-    CompoundBH, SeparateBH, DDR, SeqStepPlus,
+    CompoundBH, SeparateBH, DDR, SeqStepPlus, GimenezZou,
     LocalFDROracle, SENS,
     fit, fit_statistic, fit_reference, nobs, orbit_variance, orbit_tail, compound_pvalues, separate_pvalues
 

@@ -3,7 +3,7 @@
 
 End-to-end multiple testing with a fixed or orbit-learned statistic S-hat.
 `group` implements `AbstractRandomizationGroup`; `procedure` implements
-`AbstractMultipleTestingProcedure` (`CompoundBH`, `SeparateBH`, `DDR`, or `SeqStepPlus`).
+`AbstractMultipleTestingProcedure` (`CompoundBH`, `SeparateBH`, `DDR`, `SeqStepPlus`, or `GimenezZou`).
 
 `fit(method, samples)` prepares the statistic using `fit_statistic(group, statistic, samples)`,
 constructs its randomization reference distributions, and applies the procedure.
@@ -28,6 +28,8 @@ To reuse a reference distribution across procedures or levels, use the
 intermediate `fit_reference(group, score, samples)` interface instead.
 For SeqStep+, use `group=InvolutionGroup()` for the default half/half sign flip,
 or `InvolutionGroup(H)` for another fixed involution (Section 3.4).
+For larger finite groups, use `GimenezZou()`, counting every group element.
+For example, `StratifiedPermutations(fixed=[1])` fixes the first observation.
 Sample types must subtype `AbstractRandomizationSample`; new testing problems
 provide their own summary adapters and group-specific reference construction.
 """

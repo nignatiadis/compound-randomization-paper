@@ -34,6 +34,27 @@ Base.@kwdef struct SeqStepPlus <: AbstractMultipleTestingProcedure
     α::Float64 = 0.1
 end
 
+"""
+    GimenezZou(; α=0.1)
+
+Selective SeqStep+ for a finite group of order m >= 2 (Procedure 3).
+Let M_i be the maximum group score and C_i the maximum over nonidentity
+transformations. Set T_i = M_i * sign(S_i - C_i), with sign(0) = 0.
+At each distinct positive |T_i|, estimate FDR by
+(1 + count(T_i <= -s)) / ((m-1) * max(1, count(T_i >= s))).
+Use the smallest qualifying threshold and reject all T_i >= s.
+
+Scores must be finite and nonnegative. Observed ties for the maximum give
+T_i=0 and enter neither count. Equal magnitudes enter together.
+All group elements must be counted: reduced sign or permutation references
+are not full-group references and are rejected.
+To use a smaller group, specify an actual subgroup, for example
+`StratifiedPermutations(fixed=[1])`, rather than dropping duplicate scores.
+"""
+Base.@kwdef struct GimenezZou <: AbstractMultipleTestingProcedure
+    α::Float64 = 0.1
+end
+
 function check_level(alpha)
     0 < alpha < 1 || throw(ArgumentError("level must lie strictly between zero and one"))
 end
@@ -130,14 +151,13 @@ function fit(method::DDR, r::RandomizationFit)
     (; bh_result(method, p; tau = method.τ)..., orbit_cutoff = cutoff, weights)
 end
 
-"""Score ties take -calibration; positive magnitude ties enter together."""
+"""Score ties give zero; positive magnitude ties enter together."""
 function fit(method::SeqStepPlus, r::RandomizationFit{G,S,R}) where {G,S,R<:InvolutionReference}
     check_level(method.α)
     observed, calibration = r.reference.observed, r.reference.calibration
     all(isfinite, observed) && all(isfinite, calibration) || throw(ArgumentError("SeqStep+ needs finite scores"))
     all(>=(0), observed) && all(>=(0), calibration) || throw(ArgumentError("SeqStep+ needs nonnegative scores"))
-    # Equality takes -calibration, as in Procedure 3.
-    signed = ifelse.(observed .> calibration, observed, .-calibration)
+    signed = max.(observed, calibration) .* sign.(observed .- calibration)
     order = sortperm(abs.(signed); rev = true)
     magnitude = abs.(signed[order])
     nrejections = cumsum(signed[order] .> 0)
@@ -152,4 +172,37 @@ function fit(method::SeqStepPlus, r::RandomizationFit{G,S,R}) where {G,S,R<:Invo
     rejected = isnothing(k) ? falses(length(observed)) : signed .>= cutoff
     (; method, statistic = r.statistic, observed, calibration, cutoff,
         rj_idx = rejected, total_rejections = count(rejected))
+end
+
+function fit(method::GimenezZou, r::RandomizationFit{G,S,FiniteRandomizationScores}) where {G,S}
+    check_level(method.α)
+    if (r.group isa SignFlips && r.group.reduce_symmetry && sign_symmetric(r.statistic)) ||
+        (r.group isa Permutations && r.group.reduce_symmetry && within_group_symmetric(r.statistic))
+        throw(ArgumentError("GimenezZou needs every group element; use reduce_symmetry=false"))
+    end
+    scores = r.reference.sorted_scores
+    m, n = size(scores)
+    m >= 2 || throw(ArgumentError("GimenezZou needs a group of order at least two"))
+    n == length(r.observed) && n > 0 || throw(ArgumentError("inconsistent or empty score reference"))
+    all(x -> isfinite(x) && x >= 0, scores) &&
+        all(x -> isfinite(x) && x >= 0, r.observed) ||
+        throw(ArgumentError("GimenezZou needs finite nonnegative scores"))
+    M = scores[end,:]
+    other_maxima = ifelse.(r.observed .== M, scores[end-1,:], M)
+    signed = M .* sign.(r.observed .- other_maxima)
+    order = sortperm(abs.(signed); rev=true)
+    magnitude = abs.(signed[order])
+    nwinners = cumsum(signed[order] .> 0)
+    ncalibration = cumsum(signed[order] .< 0)
+    fdr_hat = (1 .+ ncalibration) ./ ((m-1) .* max.(1,nwinners))
+    # Evaluate positive thresholds only after the whole magnitude tie block.
+    k = findlast(eachindex(order)) do j
+        magnitude[j] > 0 && fdr_hat[j] <= method.α &&
+            (j == n || magnitude[j] != magnitude[j+1])
+    end
+    cutoff = isnothing(k) ? Inf : magnitude[k]
+    rejected = signed .>= cutoff
+    (; method, statistic=r.statistic, observed=r.observed, maxima=M,
+        unique_maximum=signed .> 0, group_size=m, cutoff, rj_idx=rejected,
+        total_rejections=count(rejected))
 end
