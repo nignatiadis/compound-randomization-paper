@@ -5,25 +5,39 @@ Compound BH, separate BH, and DDR act on a randomization reference fit through
 """
 abstract type AbstractMultipleTestingProcedure end
 
+"""
+    CompoundBH(; α=0.1, compute_pvalues=true)
+
+BH with compound randomization p-values. With `compute_pvalues=false`, return
+the same rejection decisions and cutoff, with `pvalue=adjp=nothing`.
+For rotations, search the score ranking without computing every p-value.
+Other references retain their existing p-value calculation internally.
+"""
 Base.@kwdef struct CompoundBH <: AbstractMultipleTestingProcedure
     α::Float64 = 0.1
+    compute_pvalues::Bool = true
 end
+CompoundBH(α::Real) = CompoundBH(; α)
 
 Base.@kwdef struct SeparateBH <: AbstractMultipleTestingProcedure
     α::Float64 = 0.1
 end
 
 """
-    DDR(; α=0.1, τ=α/10)
+    DDR(; α=0.1, τ=α/10, compute_pvalues=true)
 
 Procedure 2: find s_tau from the mean orbit-tail odds, then compute
 P_i = mean_j[xi_j(S_i) / (1 - xi_j(s_tau))] as in equation (14).
 Apply BH at level alpha after censoring p-values above tau to one.
+`compute_pvalues=false` omits the p-value vectors and uses the same fast
+rotation search as `CompoundBH`. Orbit cutoff and weights are still returned.
 """
 Base.@kwdef struct DDR <: AbstractMultipleTestingProcedure
     α::Float64 = 0.1
     τ::Float64 = α / 10
+    compute_pvalues::Bool = true
 end
+DDR(α::Real, τ::Real) = DDR(; α, τ)
 
 """
 Selective SeqStep+ for a fixed group of order two (Procedure 3).
@@ -59,17 +73,70 @@ function check_level(alpha)
     0 < alpha < 1 || throw(ArgumentError("level must lie strictly between zero and one"))
 end
 
-function bh_result(method, p; tau = nothing)
+function bh_result(method, p; tau=nothing)
     check_level(method.α)
     isnothing(tau) || check_level(tau)
     adjp = adjust(isnothing(tau) ? p : ifelse.(p .<= tau, p, 1.0), BenjaminiHochberg())
     rejected = adjp .<= method.α
     cutoff = any(rejected) ? maximum(p[rejected]) : 0.0
-    (; method, pvalue = p, adjp, cutoff,
-        rj_idx = rejected, total_rejections = count(rejected))
+    (; method, pvalue=p, adjp, cutoff,
+        rj_idx=rejected, total_rejections=count(rejected))
 end
 
-fit(method::CompoundBH, r::RandomizationFit) = bh_result(method, compound_pvalues(r))
+# Finite references already have an efficient pooled p-value implementation.
+function bh_result(method, r::RandomizationFit, weights; tau=nothing)
+    p = all(isfinite, weights) ? pooled_pvalues(r, weights) : fill(Inf, length(weights))
+    result = bh_result(method, p; tau)
+    (; result..., pvalue=nothing, adjp=nothing)
+end
+
+"""
+BH decisions from the monotone pooled rotation tail, without all p-values.
+At rank k, count p_i <= alpha*k/n by binary search and repeat until k stabilizes.
+The fixed point is BH's largest qualifying rank; equal scores enter together.
+The numerical cap tau is one for compound BH and method.τ for DDR.
+"""
+function bh_result(method, r::RandomizationFit{G,S,R}, weights; tau::Real=1.0) where {G,S,R<:RotationReference}
+    check_level(method.α)
+    n = length(r.observed)
+    rejected, cutoff = falses(n), 0.0
+    if all(isfinite, weights)
+        scores = sort(r.observed; rev=true)
+        cache = Dict{Int,Float64}()
+        k = n
+        while k > 0
+            lower, upper = 0, k
+            while lower < upper
+                j = (lower + upper + 1) ÷ 2
+                p = get!(cache, j) do
+                    sum(weights[i] * orbit_tail(r, i, scores[j]) for i in 1:n) / n
+                end
+                # Preserve MultipleTesting.adjust's rounding at BH boundaries.
+                if p * (n / k) <= method.α && p <= tau
+                    lower = j
+                else
+                    upper = j - 1
+                end
+            end
+            if lower == k
+                rejected = r.observed .>= scores[k]
+                cutoff = cache[k]
+                break
+            end
+            k = lower
+        end
+    end
+    (; method, pvalue=nothing, adjp=nothing, cutoff,
+        rj_idx=rejected, total_rejections=count(rejected))
+end
+
+function fit(method::CompoundBH, r::RandomizationFit)
+    if method.compute_pvalues
+        return bh_result(method, compound_pvalues(r))
+    end
+    bh_result(method, r, ones(length(r.observed)))
+end
+
 fit(method::SeparateBH, r::RandomizationFit) = bh_result(method, separate_pvalues(r))
 
 """
@@ -94,15 +161,27 @@ function ddr_tail_odds(reference::RotationReference, s)
 end
 
 """
-Scan the distinct finite-reference scores from largest to smallest.
-The last qualifying score before the tail odds exceed tau is s_tau.
+Find the first qualifying finite-reference score without collecting and sorting
+all scores again. Bisect the largest remaining column interval, then narrow
+every interval using the monotone right-limit tail odds.
 """
 function ddr_cutoff(reference::FiniteRandomizationScores, tau)
-    support = sort!(unique(vec(reference.sorted_scores)); rev=true)
+    L, n = size(reference.sorted_scores)
+    lower, upper = ones(Int, n), fill(L, n)
     cutoff = Inf
-    for s in support
-        ddr_tail_odds(reference, s) > tau && break
-        cutoff = s
+    while any(lower .<= upper)
+        j = argmax(upper .- lower)
+        s = reference.sorted_scores[(lower[j] + upper[j]) ÷ 2, j]
+        if ddr_tail_odds(reference, s) <= tau
+            cutoff = s
+            for (i, scores) in enumerate(eachcol(reference.sorted_scores))
+                upper[i] = searchsortedfirst(scores, s) - 1
+            end
+        else
+            for (i, scores) in enumerate(eachcol(reference.sorted_scores))
+                lower[i] = searchsortedlast(scores, s) + 1
+            end
+        end
     end
     cutoff
 end
@@ -141,6 +220,10 @@ function fit(method::DDR, r::RandomizationFit)
     check_level(method.τ)
     cutoff = ddr_cutoff(r.reference, method.τ)
     weights = [inv(1 - orbit_tail(r, i, cutoff)) for i in eachindex(r.observed)]
+    if !method.compute_pvalues
+        return (; bh_result(method, r, weights; tau=method.τ)...,
+            orbit_cutoff=cutoff, weights)
+    end
     # Degenerate cutoff atoms may give a zero denominator. Conservatively reject
     # nothing, rather than silently turn an undefined 0/0 contribution into zero.
     p = if all(isfinite, weights)
@@ -148,7 +231,7 @@ function fit(method::DDR, r::RandomizationFit)
     else
         fill(Inf, length(weights))
     end
-    (; bh_result(method, p; tau = method.τ)..., orbit_cutoff = cutoff, weights)
+    (; bh_result(method, p; tau=method.τ)..., orbit_cutoff=cutoff, weights)
 end
 
 """Score ties give zero; positive magnitude ties enter together."""

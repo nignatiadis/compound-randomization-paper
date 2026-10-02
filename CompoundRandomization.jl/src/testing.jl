@@ -8,7 +8,10 @@ End-to-end multiple testing with a fixed or orbit-learned statistic S-hat.
 `fit(method, samples)` prepares the statistic using `fit_statistic(group, statistic, samples)`,
 constructs its randomization reference distributions, and applies the procedure.
 It returns the procedure's result: all have `rj_idx`; p-value methods also
-have `pvalue` and `adjp`. SeqStep+ requires an `InvolutionGroup` and uses the
+have `pvalue` and `adjp`. For `CompoundBH` and `DDR`, set
+`compute_pvalues=false` to omit those vectors and accelerate rotation decisions.
+Their `cutoff` remains the largest rejected p-value (zero if none).
+SeqStep+ requires an `InvolutionGroup` and uses the
 paired observed/calibration scores, not p-values.
 For an Empirikos Limma estimator wrapped in `ModeratedTScore`, prior fitting uses
 `orbit_variance(group, sample)`, with the group-appropriate degrees of freedom.

@@ -23,6 +23,7 @@ include("interfaces.jl")
 include("two_sample.jl")
 include("regression.jl")
 include("gimenez_zou.jl")
+include("decisions.jl")
 
 @testset "Sample and baseline interface" begin
     @test isfile(SENS(seed=123).script)
