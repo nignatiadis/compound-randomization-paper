@@ -38,5 +38,5 @@ in the contrast order above. Each SeqStep+ donor swap is reported separately,
 in donor order M28, M29, M30 where available. The GZ table row uses the subgroup
 fixing M28 for naive activation and the full group otherwise.
 
-`code/calibration.jl` contains exact shortcuts for the large number of probes;
-it avoids computing every pair of orbit tails. Data and results are generated.
+For rotations, `compute_pvalues=false` requests exact rejection decisions
+without computing every probe's p-value. Data and results are generated.
